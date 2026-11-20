@@ -54,6 +54,20 @@ class DIAAttack(BaseAttack):
         Cache directory passed to Hugging Face loading.
     local_files_only : bool
         Load cached model files without downloading missing files.
+    objective : str
+        ``"original"`` preserves the authors' PT/R implementation.
+        ``"spectral"`` uses a project-specific random-target frequency
+        objective on the inverted latent; requires ``variant="pt"``.
+    spectral_band_weights : tuple of float
+        Weights of radial frequency bands [0, 1/8), [1/8, 1/4),
+        [1/4, 1/2), and [1/2, sqrt(1/2)] in cycles per latent pixel.
+        All latent channels participate; no watermark mask is required.
+    quality_weight : float
+        Weight of mean squared pixel change normalized by eps squared
+        for the spectral objective. This is not a perceptual guarantee.
+    latent_scale_weight : float
+        Weight of per-channel mean and log-standard-deviation changes
+        for the spectral objective.
 
     Notes
     -----
@@ -93,10 +107,28 @@ class DIAAttack(BaseAttack):
         revision: str | None = None,
         cache_dir: str | None = None,
         local_files_only: bool = False,
+        objective: str = "original",
+        spectral_band_weights: tuple[float, ...] = (4.0, 2.0, 1.0, 1.0),
+        quality_weight: float = 0.1,
+        latent_scale_weight: float = 0.05,
     ) -> None:
         super().__init__()
         if variant not in ("pt", "r"):
             raise ValueError("variant must be 'pt' or 'r'")
+        if objective not in ("original", "spectral"):
+            raise ValueError("objective must be 'original' or 'spectral'")
+        if objective == "spectral" and variant != "pt":
+            raise ValueError("The spectral objective requires variant='pt'")
+        if (
+            len(spectral_band_weights) != 4
+            or any(not math.isfinite(w) or w < 0 for w in spectral_band_weights)
+            or sum(spectral_band_weights) <= 0
+        ):
+            raise ValueError("Provide four finite nonnegative band weights with positive sum")
+        for name, value in (("quality_weight", quality_weight),
+                            ("latent_scale_weight", latent_scale_weight)):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
         if not math.isfinite(eps) or not 0 <= eps <= 1:
             raise ValueError("eps must be finite and in [0, 1]")
         if not math.isfinite(step_size) or step_size <= 0:
@@ -132,6 +164,10 @@ class DIAAttack(BaseAttack):
             iterations=iterations,
             num_inference_steps=num_inference_steps,
             prompt=prompt,
+            objective=objective,
+            spectral_band_weights=tuple(spectral_band_weights),
+            quality_weight=quality_weight,
+            latent_scale_weight=latent_scale_weight,
         )
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:

@@ -22,6 +22,10 @@ def load_method(
     iterations: int,
     num_inference_steps: int,
     prompt: str,
+    objective: str = "original",
+    spectral_band_weights: tuple[float, ...] = (4.0, 2.0, 1.0, 1.0),
+    quality_weight: float = 0.1,
+    latent_scale_weight: float = 0.05,
 ) -> Callable[..., torch.Tensor]:
     from diffusers import DDIMScheduler
     from .vendor.pipeline import CustomDiffusionPipeline
@@ -63,7 +67,16 @@ def load_method(
         backward_uncond_prompt=prompt,
         precision="float32" if dtype == torch.float32 else "float16",
     )
-    method = (ProcessTrajectory if variant == "pt" else Reconstruction)(
-        pipe, **config
-    )
+    if objective == "spectral":
+        from .spectral import SpectralAttack
+
+        method = SpectralAttack(
+            pipe, band_weights=spectral_band_weights,
+            quality_weight=quality_weight,
+            latent_scale_weight=latent_scale_weight, **config
+        )
+    else:
+        method = (ProcessTrajectory if variant == "pt" else Reconstruction)(
+            pipe, **config
+        )
     return method

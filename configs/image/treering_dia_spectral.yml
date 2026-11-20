@@ -1,0 +1,31 @@
+algorithms:
+  - treering
+datasets:
+{% include 'common/diffusiondb_prompts.yml' %}
+attacks:
+  - Identity
+  - dia:
+      report_name: dia_spectral_sd21
+      variant: pt
+      objective: spectral
+      model_id: WIBE-HuggingFace/stable-diffusion-2-1-base
+      eps: 0.05
+      step_size: 0.005
+      iterations: 20
+      num_inference_steps: 10
+      spectral_band_weights: [4.0, 2.0, 1.0, 1.0]
+      quality_weight: 0.1
+      latent_scale_weight: 0.05
+      seed: 1234
+post_attack_metrics:
+  - PSNR
+  - SSIM
+  - LPIPS
+post_extract_metrics:
+{% include 'common/tpr_fpr.yml' %}
+pipeline:
+  result_path: ./test_results/treering_dia_spectral
+  skip_errors: false
+  aggregators:
+    - CSV:
+        table_name: table
