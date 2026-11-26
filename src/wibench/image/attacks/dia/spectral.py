@@ -44,8 +44,8 @@ def recomputed_vjp(
     return adjoint.float() / loss_scale, loss.detach(), value
 
 
-class SpectralAttack(ProcessTrajectory):
-    """Minimize a normalized FFT loss with bounded pixel updates.
+class RandomTargetAttack(ProcessTrajectory):
+    """Optimize the inverted latent towards a fixed random target.
 
     Uses the authors' surrogate model and DDIM equations, with consistent
     deterministic VAE mode() in both passes. A clean start and float32 pixel
@@ -53,15 +53,15 @@ class SpectralAttack(ProcessTrajectory):
     are selected solely by the surrogate objective, never by detector output.
     """
 
-    def __init__(
-        self, model, *, band_weights: tuple[float, ...],
-        quality_weight: float, latent_scale_weight: float, **config
-    ) -> None:
+    def __init__(self, model, *, quality_weight: float,
+                 latent_scale_weight: float, **config) -> None:
         super().__init__(model, **config)
-        self.band_weights = band_weights
         self.quality_weight = quality_weight
         self.latent_scale_weight = latent_scale_weight
         self.history: list[dict] = []
+
+    def _target_loss(self, target, reference):
+        raise NotImplementedError
 
     def _encode(self, pixels: torch.Tensor) -> torch.Tensor:
         dtype = next(self.model.vae.parameters()).dtype
@@ -90,16 +90,17 @@ class SpectralAttack(ProcessTrajectory):
         with torch.no_grad():
             reference = self._invert(source, steps).detach()
             target = torch.randn(reference.shape, device=reference.device, dtype=torch.float32)
+            target_loss = self._target_loss(target, reference)
         current = source.clone()
         best, best_score = source.clone(), float("inf")
         self.history = []
 
         def terminal_loss(latent):
-            return (spectral_distance(latent, target, self.band_weights)
+            return (target_loss(latent)
                     + self.latent_scale_weight * latent_scale_distance(latent, reference))
 
         # The public budgets have been converted to [-1, 1] by backend.py.
-        for iteration in trange(self.iters + 1, desc="spectral"):
+        for iteration in trange(self.iters + 1, desc=self.objective_name):
             leaf = current.detach().requires_grad_(True)
             quality = self.quality_weight * ((leaf - source) / self.eps).square().mean()
             if iteration < self.iters:
@@ -116,20 +117,20 @@ class SpectralAttack(ProcessTrajectory):
                 )[0].float() / loss_scale
                 grad = grad + torch.autograd.grad(quality, leaf)[0]
                 if not torch.isfinite(grad).all():
-                    raise RuntimeError("Non-finite spectral DIA pixel gradient")
+                    raise RuntimeError(f"Non-finite {self.objective_name} DIA pixel gradient")
             else:
                 with torch.no_grad():
                     terminal = self._invert(leaf, steps)
                     loss = terminal_loss(terminal)
             score = float(loss) + float(quality.detach())
             if not torch.isfinite(loss) or not torch.isfinite(quality):
-                raise RuntimeError("Non-finite spectral DIA loss")
+                raise RuntimeError(f"Non-finite {self.objective_name} DIA loss")
             if score < best_score:
                 best, best_score = current.detach().clone(), score
             with torch.no_grad():
                 self.history.append(dict(
                     iteration=iteration, loss=score,
-                    frequency=float(spectral_distance(terminal, target, self.band_weights)),
+                        **{self.loss_name: float(target_loss(terminal))},
                     scale=float(latent_scale_distance(terminal, reference)),
                     pixel_penalty=float(quality.detach()),
                     linf_0_1=float((current-source).abs().max()/2),
@@ -138,8 +139,25 @@ class SpectralAttack(ProcessTrajectory):
                     current = current - self.lr * grad.sign()
                     current = torch.maximum(torch.minimum(current, source+self.eps), source-self.eps)
                     current.clamp_(-1, 1)
-        print("DIA_SPECTRAL_TRACE", json.dumps(dict(
+        print(self.trace_name, json.dumps(dict(
             initial=self.history[0], final=self.history[-1], best_loss=best_score,
             selected_linf_0_1=float((best-source).abs().max()/2),
         )), flush=True)
         return best
+
+
+class SpectralAttack(RandomTargetAttack):
+    """Minimize a normalized FFT loss with bounded pixel updates."""
+
+    objective_name = "spectral"
+    loss_name = "frequency"
+    trace_name = "DIA_SPECTRAL_TRACE"
+
+    def __init__(self, model, *, band_weights: tuple[float, ...],
+                 quality_weight: float, latent_scale_weight: float, **config) -> None:
+        super().__init__(model, quality_weight=quality_weight,
+                         latent_scale_weight=latent_scale_weight, **config)
+        self.band_weights = band_weights
+
+    def _target_loss(self, target, reference):
+        return lambda latent: spectral_distance(latent, target, self.band_weights)

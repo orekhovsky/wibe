@@ -57,17 +57,22 @@ class DIAAttack(BaseAttack):
     objective : str
         ``"original"`` preserves the authors' PT/R implementation.
         ``"spectral"`` uses a project-specific random-target frequency
-        objective on the inverted latent; requires ``variant="pt"``.
+        objective on the inverted latent.
+        ``"gaussian_shading"`` uses a smooth random-sign objective on the
+        inverted latent. Both random-target objectives require ``variant="pt"``.
     spectral_band_weights : tuple of float
         Weights of radial frequency bands [0, 1/8), [1/8, 1/4),
         [1/4, 1/2), and [1/2, sqrt(1/2)] in cycles per latent pixel.
         All latent channels participate; no watermark mask is required.
     quality_weight : float
         Weight of mean squared pixel change normalized by eps squared
-        for the spectral objective. This is not a perceptual guarantee.
+        for the random-target objectives. This is not a perceptual guarantee.
     latent_scale_weight : float
         Weight of per-channel mean and log-standard-deviation changes
-        for the spectral objective.
+        for the random-target objectives.
+    sign_temperature : float
+        Positive temperature of the Gaussian Shading sign loss, in units of
+        the clean inverted latent's channel standard deviation.
 
     Notes
     -----
@@ -86,7 +91,7 @@ class DIAAttack(BaseAttack):
     effectiveness must be measured for each watermark method.
 
     Example configurations are provided in ``configs/image/treering_dia.yml``
-    and ``configs/image/gaussian_shading_dia.yml``.
+    and ``configs/image/gaussian_shading_dia_gs.yml``.
     """
 
     name = "dia"
@@ -111,14 +116,20 @@ class DIAAttack(BaseAttack):
         spectral_band_weights: tuple[float, ...] = (4.0, 2.0, 1.0, 1.0),
         quality_weight: float = 0.1,
         latent_scale_weight: float = 0.05,
+        sign_temperature: float = 1.0,
     ) -> None:
         super().__init__()
         if variant not in ("pt", "r"):
             raise ValueError("variant must be 'pt' or 'r'")
-        if objective not in ("original", "spectral"):
-            raise ValueError("objective must be 'original' or 'spectral'")
+        if objective not in ("original", "spectral", "gaussian_shading"):
+            raise ValueError("objective must be 'original', 'spectral' or 'gaussian_shading'")
         if objective == "spectral" and variant != "pt":
             raise ValueError("The spectral objective requires variant='pt'")
+        if objective == "gaussian_shading":
+            if variant != "pt":
+                raise ValueError("The Gaussian Shading objective requires variant='pt'")
+            if not math.isfinite(sign_temperature) or sign_temperature <= 0:
+                raise ValueError("sign_temperature must be finite and positive")
         if (
             len(spectral_band_weights) != 4
             or any(not math.isfinite(w) or w < 0 for w in spectral_band_weights)
@@ -168,6 +179,7 @@ class DIAAttack(BaseAttack):
             spectral_band_weights=tuple(spectral_band_weights),
             quality_weight=quality_weight,
             latent_scale_weight=latent_scale_weight,
+            sign_temperature=sign_temperature,
         )
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:

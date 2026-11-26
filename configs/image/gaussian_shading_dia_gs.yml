@@ -1,0 +1,36 @@
+algorithms:
+  - gaussian_shading
+datasets:
+{% include 'common/diffusiondb_prompts.yml' %}
+attacks:
+  - Identity
+  - dia:
+      report_name: dia_gs_sd21
+      variant: pt
+      objective: gaussian_shading
+      model_id: WIBE-HuggingFace/stable-diffusion-2-1-base
+      eps: 0.05
+      step_size: 0.005
+      iterations: 20
+      num_inference_steps: 10
+      sign_temperature: 1.0
+      quality_weight: 0.1
+      latent_scale_weight: 0.05
+      seed: 1234
+post_attack_metrics:
+  - PSNR
+  - SSIM
+  - LPIPS
+post_extract_metrics:
+  - BER
+  - p-value:
+      report_name: pvalue
+  - TPR@xFPR:
+      report_name: detected
+      fpr_rate: 0.0001
+pipeline:
+  result_path: ./test_results/gaussian_shading_dia_gs
+  skip_errors: false
+  aggregators:
+    - CSV:
+        table_name: table

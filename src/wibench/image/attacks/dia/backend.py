@@ -26,6 +26,7 @@ def load_method(
     spectral_band_weights: tuple[float, ...] = (4.0, 2.0, 1.0, 1.0),
     quality_weight: float = 0.1,
     latent_scale_weight: float = 0.05,
+    sign_temperature: float = 1.0,
 ) -> Callable[..., torch.Tensor]:
     from diffusers import DDIMScheduler
     from .vendor.pipeline import CustomDiffusionPipeline
@@ -73,6 +74,13 @@ def load_method(
         method = SpectralAttack(
             pipe, band_weights=spectral_band_weights,
             quality_weight=quality_weight,
+            latent_scale_weight=latent_scale_weight, **config
+        )
+    elif objective == "gaussian_shading":
+        from .gaussian_shading import GaussianShadingAttack
+
+        method = GaussianShadingAttack(
+            pipe, sign_temperature=sign_temperature, quality_weight=quality_weight,
             latent_scale_weight=latent_scale_weight, **config
         )
     else:
